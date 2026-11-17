@@ -672,11 +672,24 @@ function pairInfo(set){
   for(let i=0;i<set.length;i++)for(let j=i+1;j<set.length;j++){const r=rel(SK[set[i]].tag,SK[set[j]].tag);if(r==='g')g.push([set[i],set[j]]);if(r==='b')b.push([set[i],set[j]]);}
   return {g,b,med:set.some(s=>SK[s].tag==='mediate')};
 }
-function resolveSkills(ids){
-  let set=[...new Set(ids)];const combos=[];let ch=true;
-  while(ch){ch=false;for(const c of COMBO){if(set.includes(c[0])&&set.includes(c[1])){set=set.filter(x=>x!==c[0]&&x!==c[1]);if(!set.includes(c[2]))set.push(c[2]);combos.push(c);ch=true;break;}}}
-  return {set,combos};
+/* lvs: levels aligned with ids (array), or a {skill:level} map.
+   The same skill twice merges into one and gains +1 (plus both levels).
+   A further combo carries over half of its ingredients' total plus, rounded down (a lone +1 is lost). */
+function resolveSkills(ids,lvs){
+  const set=[],combos=[],boosts=[],lv={};
+  ids.forEach((s,i)=>{const l=Array.isArray(lvs)?(lvs[i]||0):((lvs&&lvs[s])||0);if(set.includes(s)){lv[s]+=l+1;boosts.push(s)}else{set.push(s);lv[s]=l}});
+  let cur=set,ch=true;
+  while(ch){ch=false;for(const c of COMBO){if(cur.includes(c[0])&&cur.includes(c[1])){const n=Math.floor((lv[c[0]]+lv[c[1]])/2);cur=cur.filter(x=>x!==c[0]&&x!==c[1]);delete lv[c[0]];delete lv[c[1]];
+    if(cur.includes(c[2])){lv[c[2]]+=n+1;boosts.push(c[2])}else{cur.push(c[2]);lv[c[2]]=n}combos.push(c);ch=true;break;}}}
+  const set2=cur;
+  const lvo={};set2.forEach(s=>{if(lv[s])lvo[s]=lv[s]});
+  return {set:set2,combos,lv:lvo,boosts};
 }
+/* skill levels: +1 adds 30% of the skill's own base value (rounded up) */
+const COMBO_OUT=new Set(COMBO.map(c=>c[2]));
+function lvOf(m,s){return (m&&m.lv&&m.lv[s])||0}
+function skVal(sk,lv){const v=SK[sk].val;return v+(lv||0)*Math.ceil(v*0.3)}
+function skName(sk,lv){return SK[sk].n+(lv?'+'+lv:'')}
 function famBase(m){return m.sp?SPX[m.sp].p:FAM[m.fam].p}
 function basePos(m){return m.o||famBase(m)}
 const BOARD=20;
@@ -693,7 +706,7 @@ function posSteps(m){
 function posOf(m){return posSteps(m).fin}
 function breakdown(m){
   const p=pairInfo(m.skills);
-  const sv=m.skills.reduce((a,s)=>a+SK[s].val,0);
+  const sv=m.skills.reduce((a,s)=>a+skVal(s,lvOf(m,s)),0);
   const pg=m.quirk==='kuchi'?0:p.g.length*PAIR_GOOD, pb=p.med?0:p.b.length*PAIR_BAD;
   const sx=m.sp?SPX_BONUS:0;
   const pre=m.core+sv+pg-pb+sx;
@@ -801,7 +814,7 @@ function newMeta(){return {v:4,rp:0,fac:{},chapter:1,zSp:{},zSpx:{},zCombo:{},zS
 const F=(meta,id)=>!!meta.fac[id];
 function invCap(meta){return 6+(F(meta,'cage')?2:0)}
 function bankCap(meta){return 4+(F(meta,'bank')?3:0)}
-function bankFee(sk){return Math.round(SK[sk].val*0.8)+3}
+function bankFee(sk,lv){return Math.round(skVal(sk,lv)*0.8)+3}
 function showFit(m,q){const p=posOf(m);const d=Math.hypot(p[0]-q.zone[0],p[1]-q.zone[1]);return clamp(1-d/24,0,1)}
 function showPay(m,q){return Math.round(totalOf(m)*(0.22+0.25*showFit(m,q)))}
 function unitCore(ch){return 16+Math.min(ch,12)*6}
@@ -820,7 +833,7 @@ function rollMon(fam,kind,ch){
   else if(kind==='rich'){core=U*(0.9+Math.random()*0.2);sk=shuffle([...P[1],...P[2]]).slice(0,3);}
   return makeMon(fam,core,sk,qk);
 }
-function monValue(m){return m.core*0.55+m.skills.reduce((a,s)=>a+SK[s].val*0.9,0)}
+function monValue(m){return m.core*0.55+m.skills.reduce((a,s)=>a+skVal(s,lvOf(m,s))*0.9,0)}
 function bundle(label,mons,mul,free){
   const price=free?0:Math.max(5,Math.round(mons.reduce((a,m)=>a+monValue(m),0)*mul*(0.9+Math.random()*0.2)));
   return {label,mons,price,taken:false};
@@ -854,7 +867,7 @@ function monForTotal(fam,target,ch,strong){
   if(strong&&Math.random()<.35)sk.push(pick(P[3]));
   const m=makeMon(fam,1,sk);const rest=target-totalOf(m)+1;m.core=Math.max(5,Math.round(rest));return m;
 }
-function sellSkPrice(meta,sk){return Math.round((SK[sk].val*1.6+5)*(F(meta,'appraise')?1.2:1))}
+function sellSkPrice(meta,sk,lv){return Math.round((skVal(sk,lv)*1.6+5)*(F(meta,'appraise')?1.2:1))}
 function sellMonPrice(meta,m){return Math.round(totalOf(m)*0.4*(F(meta,'appraise')?1.2:1))}
 function genTrades(run,meta){
   const ch=run.quest.free?12:run.ch;const U=unitCore(ch);const out=[];const H=homeInv(run);
@@ -880,11 +893,11 @@ function genSells(run,meta){
   out.push({kind:'total',v:tv,sell:true,text:'総合値'+tv+'以上の子を1体買い取る'});
   return out;
 }
-function jobPrice(run,meta,job,c){if(!job.sell)return 0;if(c.type==='bank'){const b=run.bank.find(x=>x.u===c.id);return b?sellSkPrice(meta,b.sk):0}const m=run.inv.find(x=>x.id===c.id);return m?sellMonPrice(meta,m):0}
+function jobPrice(run,meta,job,c){if(!job.sell)return 0;if(c.type==='bank'){const b=run.bank.find(x=>x.u===c.id);return b?sellSkPrice(meta,b.sk,b.lv):0}const m=run.inv.find(x=>x.id===c.id);return m?sellMonPrice(meta,m):0}
 function isAway(run,m){return m.back!=null&&run.day<=m.back}
 function homeInv(run){return run.inv.filter(m=>!isAway(run,m))}
 function jobCandidates(run,job){
-  if(job.kind==='tag')return run.bank.filter(b=>SK[b.sk].tag===job.v).map(b=>({type:'bank',id:b.u,label:SK[b.sk].n}));
+  if(job.kind==='tag')return run.bank.filter(b=>SK[b.sk].tag===job.v).map(b=>({type:'bank',id:b.u,label:skName(b.sk,b.lv)}));
   if(job.kind==='fam')return homeInv(run).filter(m=>m.fam===job.v).map(m=>({type:'mon',id:m.id,label:nameOf(m)}));
   return homeInv(run).filter(m=>totalOf(m)>=job.v).map(m=>({type:'mon',id:m.id,label:nameOf(m)}));
 }
@@ -1048,12 +1061,12 @@ function takeBundle(run,meta,i){
   run.gold-=b.price;b.taken=true;b.mons.forEach(m=>{run.inv.push(m);regM(meta,m)});return true;
 }
 function releaseMonValue(meta,m){return Math.round(totalOf(m)*0.15*(F(meta,'appraise')?1.5:1))}
-function releaseSkValue(meta,sk){return Math.round(Math.max(1,SK[sk].val*0.6)*(F(meta,'appraise')?1.5:1))}
+function releaseSkValue(meta,sk,lv){return Math.round(Math.max(1,skVal(sk,lv)*0.6)*(F(meta,'appraise')?1.5:1))}
 function releaseMon(run,meta,id){const m=run.inv.find(x=>x.id===id);if(!m||isAway(run,m))return 0;const g=releaseMonValue(meta,m);run.inv=run.inv.filter(x=>x.id!==id);run.gold+=g;return g}
-function releaseSk(run,meta,u){const b=run.bank.find(x=>x.u===u);if(!b)return 0;const g=releaseSkValue(meta,b.sk);run.bank=run.bank.filter(x=>x.u!==u);run.gold+=g;return g}
+function releaseSk(run,meta,u){const b=run.bank.find(x=>x.u===u);if(!b)return 0;const g=releaseSkValue(meta,b.sk,b.lv);run.bank=run.bank.filter(x=>x.u!==u);run.gold+=g;return g}
 function overflow(run,meta){return {inv:Math.max(0,run.inv.length-invCap(meta)),bank:Math.max(0,run.bank.length-bankCap(meta))}}
 function doJob(run,meta,ji,cid){
-  const job=run.jobs[ji];if(!job||job.done)return null;const c=jobCandidates(run,job).find(x=>x.id===cid);if(!c)return null;c.price=jobPrice(run,meta,job,c);job.done=true;job.gave=c.type==='bank'?SK[(run.bank.find(b=>b.u===c.id)||{}).sk||'dotchi'].n:nameOf(run.inv.find(m=>m.id===c.id));
+  const job=run.jobs[ji];if(!job||job.done)return null;const c=jobCandidates(run,job).find(x=>x.id===cid);if(!c)return null;c.price=jobPrice(run,meta,job,c);job.done=true;job.gave=c.type==='bank'?(b0=>skName(b0.sk,b0.lv))(run.bank.find(b=>b.u===c.id)||{sk:'dotchi'}):nameOf(run.inv.find(m=>m.id===c.id));
   if(c.type==='bank')run.bank=run.bank.filter(b=>b.u!==c.id);else run.inv=run.inv.filter(m=>m.id!==c.id);
   if(job.sell){job.got=c.price;run.gold+=c.price}
   else if(job.rew&&job.rew.mons)job.rew.mons.forEach(m=>{run.inv.push(m);regM(meta,m)});
@@ -1079,15 +1092,16 @@ function slotCount(meta,run){
 function banTags(run){const ps=fsParents(run);return ps[0]&&ps[0].quirk&&QK[ps[0].quirk].ban?QK[ps[0].quirk].ban:[]}
 function fusionCands(run){
   const ps=fsParents(run);const out=[];
-  ps.forEach((p,pi)=>p.skills.forEach((s,i)=>out.push({key:'P'+pi+'_'+i,src:'P'+pi,sk:s,vo:(p.vo&&p.vo[s])||null})));
-  run.bank.forEach(b=>out.push({key:'K'+b.u,src:'K',sk:b.sk,u:b.u,vo:b.vo||null}));
+  ps.forEach((p,pi)=>p.skills.forEach((s,i)=>out.push({key:'P'+pi+'_'+i,src:'P'+pi,sk:s,vo:(p.vo&&p.vo[s])||null,lv:lvOf(p,s)})));
+  run.bank.forEach(b=>out.push({key:'K'+b.u,src:'K',sk:b.sk,u:b.u,vo:b.vo||null,lv:b.lv||0}));
   return out;
 }
+function selLv(run){const c=fusionCands(run);return run.fs.sel.map(k=>{const x=c.find(y=>y.key===k);return x?(x.lv||0):0}).filter((_,i)=>{const x=c.find(y=>y.key===run.fs.sel[i]);return !!x})}
 function selIds(run){const c=fusionCands(run);return run.fs.sel.map(k=>(c.find(x=>x.key===k)||{}).sk).filter(Boolean)}
 function canAdd(run,meta,key){
   const c=fusionCands(run).find(x=>x.key===key);if(!c)return {ok:false};
   if(banTags(run).includes(SK[c.sk].tag))return {ok:false,why:'ban'};
-  const ids=selIds(run);if(ids.includes(c.sk))return {ok:false,why:'dup'};
+  const ids=selIds(run);if(ids.includes(c.sk)&&!COMBO_OUT.has(c.sk))return {ok:false,why:'dup'};
   if(ids.length+1>slotCount(meta,run))return {ok:false,why:'slot'};
   return {ok:true};
 }
@@ -1115,22 +1129,22 @@ function childCore(meta,ps,t){
 }
 function previewFusion(run,meta){
   const ps=fsParents(run);if(ps.length<2)return null;
-  const raw=selIds(run);const {set,combos}=resolveSkills(raw);
+  const raw=selIds(run);const {set,combos,lv,boosts}=resolveSkills(raw,selLv(run));
   const core=childCore(meta,ps,run.fs.t);
   let sp=specialFor(ps);if(sp&&core<SPX_MIN)sp=null;
   const cands=fusionCands(run);const vo={};run.fs.sel.forEach(k=>{const c=cands.find(x=>x.key===k);if(c&&c.vo&&set.includes(c.sk))vo[c.sk]=c.vo});
   const fb=sp?SPX[sp].p:FAM[ps[0].fam].p;const pp=ps.map(posOf);const av=[pp.reduce((a,p)=>a+p[0],0)/pp.length,pp.reduce((a,p)=>a+p[1],0)/pp.length];
   const o=[r1(fb[0]*2/3+av[0]/3),r1(fb[1]*2/3+av[1]/3)];
-  const child={id:'pv',fam:ps[0].fam,sp,o,core,skills:set,vo,quirk:ps[0].quirk||null,awake:run.fs.t==='final',gen:Math.max(...ps.map(p=>p.gen))+1};
-  const fee=fusionCands(run).filter(c=>c.src==='K'&&run.fs.sel.includes(c.key)).reduce((a,c)=>a+bankFee(c.sk),0);
-  return {ps,child,combos,raw,fee,spCand:specialFor(ps)};
+  const child={id:'pv',fam:ps[0].fam,sp,o,core,skills:set,lv,vo,quirk:ps[0].quirk||null,awake:run.fs.t==='final',gen:Math.max(...ps.map(p=>p.gen))+1};
+  const fee=fusionCands(run).filter(c=>c.src==='K'&&run.fs.sel.includes(c.key)).reduce((a,c)=>a+bankFee(c.sk,c.lv),0);
+  return {ps,child,combos,boosts,raw,fee,spCand:specialFor(ps)};
 }
 function optionCount(run,meta){
   const ps=fsParents(run);let n=3+(run.fs.t==='insight'?1:0)+(F(meta,'insight')?1:0);
   if(ps.some(p=>p.quirk==='hazu'))n-=1;return Math.max(2,n);
 }
 function makeOptions(run,meta,pv){
-  const base=pv.child;const clone=o=>({...base,...o,id:uid(),skills:[...(o.skills||base.skills)],vo:{...(base.vo||{})}});
+  const base=pv.child;const clone=o=>({...base,...o,id:uid(),skills:[...(o.skills||base.skills)],vo:{...(base.vo||{})},lv:{...(base.lv||{})}});
   const opts=[{k:'plain',n:'予想どおり',d:'プレビューのまま',m:clone({})}];
   const swing=()=>{const q=pick(QKS.filter(x=>x!==base.quirk));return {k:'swing',n:'振り切り',d:'土台＋15%。ただしクセ「'+QK[q].n+'」が付く'+(base.quirk?'（今のクセと入れ替わる）':''),m:clone({core:Math.round(base.core*1.15),quirk:q})}};
   const bonus=()=>{const pool=[...FPOOL[base.fam][1],...FPOOL[base.fam][2],...FPOOL[pick(FAMS)][1]].filter(s=>!base.skills.includes(s));const s=pick(pool);return {k:'bonus',n:'おまけ付き',d:'土台−20%。スキル「'+SK[s].n+'」が付く',m:clone({core:Math.round(base.core*0.8),skills:[...base.skills,s]})}};
@@ -1143,20 +1157,20 @@ function commitFusion(run,meta){
   const pv=previewFusion(run,meta);if(!pv)return null;
   if(selIds(run).length>slotCount(meta,run))return null;
   if(pv.fee>run.gold)return null;
-  run.opts=makeOptions(run,meta,pv);run.optCombos=pv.combos;
+  run.opts=makeOptions(run,meta,pv);run.optCombos=pv.combos;run.optBoosts=pv.boosts;
   return run.opts;
 }
 function chooseOption(run,meta,i){
   const o=run.opts&&run.opts[i];if(!o)return null;
   const ps=fsParents(run);const cands=fusionCands(run);const fs=run.fs;
-  const usedC=cands.filter(c=>c.src==='K'&&fs.sel.includes(c.key));const fee=usedC.reduce((a,c)=>a+bankFee(c.sk),0);
+  const usedC=cands.filter(c=>c.src==='K'&&fs.sel.includes(c.key));const fee=usedC.reduce((a,c)=>a+bankFee(c.sk,c.lv),0);
   run.gold-=fee;run.bank=run.bank.filter(b=>!usedC.some(c=>c.u===b.u));
-  const extracted=[],lost=[];
-  cands.forEach(c=>{if(c.src!=='K'&&!fs.sel.includes(c.key)){if(fs.keep===c.key){const b={u:uid(),sk:c.sk};if(c.vo)b.vo=c.vo;run.bank.push(b);extracted.push(c.sk)}else lost.push(c.sk)}});
+  const extracted=[],lost=[],exN=[];
+  cands.forEach(c=>{if(c.src!=='K'&&!fs.sel.includes(c.key)){if(fs.keep===c.key){const b={u:uid(),sk:c.sk};if(c.vo)b.vo=c.vo;if(c.lv)b.lv=c.lv;run.bank.push(b);extracted.push(c.sk);exN.push(skName(c.sk,c.lv))}else lost.push(c.sk)}});
   const m=o.m;m.id=uid();
   run.inv=run.inv.filter(x=>!ps.includes(x));run.inv.push(m);
   (run.optCombos||[]).forEach(c=>meta.zCombo[c[2]]=1);regM(meta,m);
-  run.lastFusion={ps:ps.map(p=>JSON.parse(JSON.stringify(p))),mid:m.id,combos:run.optCombos||[],extracted,lost,fee,kind:o.k,final:fs.t==='final'};
+  run.lastFusion={ps:ps.map(p=>JSON.parse(JSON.stringify(p))),mid:m.id,combos:run.optCombos||[],boosts:run.optBoosts||[],extracted,exN,lost,fee,kind:o.k,final:fs.t==='final'};
   run.opts=null;run.fs=null;
   return m;
 }
@@ -1262,7 +1276,7 @@ function sprURL(m,ol){const k=sprKey(m),e=exprOf(m);const ck=k+'|'+e+'|'+(m.awak
 const ARTA="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%()*+,-./:;=?@[]^_{|}~";
 const KV={"w": 120, "h": 76, "p": ["#0e1530", "#101937", "#1f3a5e", "#6f86c9", "#3f5290", "#2a3766", "#0a0f22", "#131c3b", "#4a5c98", "#1d2850", "#0a1022", "#56e8c3", "#8ff3dc", "#0f3340", "#346a7e", "#295b6d", "#307782", "#14474f", "#3c8894", "#40528f", "#33437a", "#24506a", "#0e2530", "#335566", "#274757", "#5a1742", "#376a75", "#11333a", "#ffc6df", "#e9559a", "#182447", "#45abae", "#1a5e60", "#2b5b65", "#ff86b8", "#5c3a08", "#fff3b0", "#e9a92e", "#b8357a", "#3b437c", "#ffd65a", "#9aa3d6", "#ffffff", "#c6cdf2", "#eef1ff", "#f3ad93", "#ffdcc6", "#4fcfc7", "#217671", "#2a1838", "#fff3ea", "#1fb7a4", "#144248", "#8cf3dc", "#ff9fb3", "#1b2850", "#8a3f45", "#c23a5a", "#b5a5dc", "#2a8d82", "#ff9cc2", "#9a1f52", "#cc2d6c", "#3fb8a0", "#ff5c9e", "#ffd25e", "#121735", "#5f6fc0", "#2c3772", "#4d0f2a", "#1f285a", "#0c1228", "#101832", "#070b16"], "b": "00001000000000000000000010000000000000000000100000002000200020002020202020202020202020202020202020202020200020002000200000000000000000000000000000000034400000000000000000000000344000000000000000000000000000000000000000000000000000344000000044444444444444444444444444444434444444444444444444444444344444444444444444444444444444444444444444444444444444344444444455555555555555555555555555555534455555555555555555555555344555555555555555555555555555555555555555555555555555344555555555555555555555555555555555555534455555555555555555555555344555555555555555555555555555555555555555555555555555344555555566666666666666666666666666666634466666666666666666666666344666666666666666666666666666666666666666666666666666344666666670701070707070707070707010707034407070707070107070207020344020202020202020202020202020202020202020202020202020344020702000000000000000000000000000000000000000000000000000000000000000000000000000020002000200020002000000000000000000000000000070701070707070707070707010707070707070707070207020702020202033333333333333333333333333333333333333333333333330202020207007070707070707070707070707070707070707070707070707070707070788888888888888888888888888888888888888888888888887070707070770701070707070707070707010707070707070707070102070207020202088888888888888888888888888888888888888888888888880202020702007070707070707070707070707070707070707070707070707070707070799999999999999999999999999999999999999999999999997070707070777701770777077707770777017707770777077702770277027202720272027abccbccbccbccbccbccbccbccbccbccbccbccbccbccba027202720272007070707070707070707070707070707070707070707070707070707020702adedfddddddddddddddddddddddddddddddddddddddda702070707070770771077707770777077707710777077707770777027102770272027202720adedgdddhdddhdddhdddhdddhdddhdddhdddhdddhddda720272027202707070707070707070707070707070707070707070707070707070707070207adedfddddddddddddddddddddddddddddddddddddddda207070707070777771777777777777777777717777777777727772777272727272727272727adidgdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhda727jjjjjjjjjj77077707770777077707770777077707770777077707770777077207720772ahehfhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdha772kkkkkkkkkk77771777777777777777777717777777777777777727172727272727272727adidgdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhda727kkkkkkkkkk07770777077707770777077707770777077707770777077707770777077207ahehfhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhdhal079999999999777717777777777777777777177777777777277727272727272727272727l7ahihghhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhha7l727amnmommm77777777777777777777777777777777777777777777777777777277727l7lahihfhhhdhhhdhhhdhhhdhhhdhhhdhhhdhhhdhhhdhhhal7l77amnmommm777717777777777777777777177777777pp77727772717272727272727l7l7ahihghhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhha7l7l7amqmomrm77777777777777777777777777777777pstp77777777777777777772777l77ahehghdhhhdhhhdhhhdhhhdhhhdhhhdhhhdhhhdhhhdhal777lamnmommmu7771777u777u777u777u77717ppppppstpp2777272727272727272727l7l7ahvhghwhhhwhhhwhhhwhhhwhhhwhhhwhhhwhhhwhhhwha7l7l7amqmxmrm7777777777777777777777777pssssssyystp77777777777727772777l7l7lahihghhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhal7l7lamnmommmu7u717u7u7u7u7u7u7u7u7uppsyyyyyyyyyttpp7u727272727272727l7l7l7ahihwhhhwhhhwhhhwhhhwhhhwhhhwhhhwhhhwhhhwhhha7l7l7amqmxmrm7777777777777777777777pssyyyyyyyyyyyystp777777777772777l777l7lahihhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhal7l7lamnrommru7u717u7u7u7u7u7u7u7upsyyyyyysyyssyyyyttp727272727272727l7l7l7ahvhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwha7l7l7amqmxmrm7u777u777u777u777u777psyyyssssyyyysssyttpu777u777277727l7l7l7lawiwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwal7l7larnrormru7u717u7u7u7u7u7u7zzzsyysssssyyyyyyyyssttzzz272727272727l7l7l7ahvhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwha7l7l7amqmxmrm7u7u7u7u7u7u7u7u7pAABCysyyyyyyyyyyyyyyysCAABDDDu7u727u7l7u7l7lawiwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwhwal7l7larnrmrmru7u717u7u7u7u7u7pCAEBCyyyyyyyyytyyyyyyytCAEBFGHD272727l7l7l7l7awvwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwa7l7l7arqrrrrr7u7u7u7u7u7u7u7upCBBBCyyyyyytyytyyytyyytCBBBFIIHD27u727l7l7l7lawvwhwwwhwwwhwwwhwwwhwwwhwwwhwwwhwwwhwwwhwwwal7l7larnrmrmr171u171u171u171psyCCCyyyttyttttJsytttytytCFFIIIHD72u27lul7lul7awvwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwaul7luarqrrrrr7u7u7u7u7u7u7u7psyyyyyyyttttJttJtttJtttyttFIIIIHDu727u7l7u7l7lawvwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwal7l7larnrmrmruuuu1uuuuuuuuuupsyyytyttJJtJKJtJJtJKJtJsttDGIIHD2u2u2ululululuawLwwwMwwwMwwwMwwwMwwwMwwwMwwwMwwwMwwwMwwwMwaululuarqrrrrr7u7u7u7u7u7u7u7psyyytyttJKJKKKJKKJKKKJJtttFIIHCp727u727l7l7l7lawvwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwal7l7larqrrrrruuuu1uuuuuuuuuupsyytpstJJJJJKKKKKKJJJJKJstFIHCtp2u2u2u2ulululuawLwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwaululuarqrrrrr7uuu7uuu7uuu7upsyytppstJNNNNOKKKKJNNNNOJstFHCyytpuu27uul7uul7laMvwwMwwwMwwwMwwwMwwwMwwwMwwwMwwwMwwwMwwwMwwal7lularqrrrrruuuu1uuuuuuuuupsyytppstJJGPNOKKKKJGPNOKJttFHCyytpu2u2u2ulululuawMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwaululuarqrQrrruuuuuuuuuuuuuupsyytpptJKJPPNOKKKKJPPNOKJFtFpsyytp2uuu2ululululaMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMalulularqrrrrruuuu1uuuuuuuuupsyytpptJJJRRPOKKKKJRRPJJJFtppsyytpu2u2u2ulululuaMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwaululuarQrQrQruuuuuuuuuuuuuupsyytpupNSSOOOKJKKJKOOJSSFHDupsyytpuuuuuu2uuululaMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMwMaluuularrrrrrrTuuu1uuuTuuuTupsyytpTuUJOKKKJVJJVOKKKOJFHD2psyytpu2u2u2u2ululuaMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMaululuarQrQrQruuuuuuuuuuuuuupsyytpuuuUJJKKKJVVOKKKJJFHDuupsyytp2uuu2uuulululaMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMwMMMalululaQrrrQrruuTu1uTuuuTuuupsyytpuuTuUDJJKKOOKKJJDFHDuu2psyytpu2u2u2u2ululuaMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMaululuarQrQrQruuuuuuuuuuuuuupsyytpuuuuDGFWJJKKKJWFGIHDuuupsyytpuuuuuu2uuuluuaMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMaluuu2aQrQrQrQTuTu1uTuTuTuTupsyytpTuTDFHHFWWJJJWFFHHDu2u2psyytpu2u2u2u2u2uluaMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMaulu2uaQQrQQQruTuuuTuuuTuuuTpsyytpuTuDGFFGFYZ!Z!FHFDuuuTupsyytpTuuu2uuu2uuulaMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMalu2uuaQrQrQrQTuTu1uTuTuTuTupsyytpTuDGIIFGF!!!!!FIHHDuTu2psyytpu2u2u2u2u2u2uaMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMau2u2uarQQQrQQuuuTuuuTuuuTuupsyytpuuDGIFGIHFWWFFIIHHDTuuupsyytpuuTuuuTuuu2uuaXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMMXMMa2uuu2aQrQrQrQTuTu1uTuTuTuTupsyytpTDGIIFGIIIFFIIIIHHDu2uTpsyytpu2u2u2u2u2u2uaM#M#M#M#M#M#M#M#M#M#M#M#M#M#M#M#M#M#M#M#M#Mau2u2uaQQQQQQQuTuTuTuTuTuTuTpsyytpuDGIIFGIIIIIIIIIIHHDuTupsyytpTuTuTuTu2uTu2aXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXMXaTu2uTaQrQQQrQTuTu1uTuTuTuTupsytpuDGIIFGIIIIIFIIIIIHHDTu2psytpTu2u2u2u2u2u2uaX#M#X#M#X#M#X#M#X#M#X#M#X#M#X#M#X#M#X#M#X#Mau2u2uaQQQQQQQuTuTuTuTuTuTuTpsytpDGIIIFGIIIIIFIIIIIIHHDTupsytpuTuTuTuTuTuTuTaXMXM#MXM#MXM#MXM#MXM#MXM#MXM#MXM#MXM#MXM#MXaTuTuTaQQQrQQQTTTT1TTTTTTTTTptytpDGIIIFGIIIIIFIIIIIIHHDTTpsytp2T2T2T2T2T2T2TaX###X###X###X###X###X###X###X###X###X###X#XaT2T2TaQQQQQQQuTuTuTuTuTuTuTupsyCGIIIFGIIIIIIFIIIIIIHHDTpsytpTuTuTuTuTuTuTu2aXX#X#X#X#X#X#X#X#X#X#X#X#X#X#X#X#X#X#X#X#XXaTujjjjjjjjjjjTTTT1TTTTTTTTTTptyCGIIIFGIIIIIIFIIIIIIIHHDptytpTTT2TTT2T2T2T2TaX#X###X###X###X###X###X###X###X###X###X###XaT2kkkkkkkkkkkuTuTuTuTuTuTuTuTpCGIIIIFGHHHHHHFHHHHHHHHHDuptpuTuTuTuTuTuTu333333333333333333333333333333333333333333333333333kkkkkkkkkkTTTT1TTTTTTTTTTTpCGIIIIFHHHHHHHFHHHHHHHHHHDptpTT2TTT2T2T2T2888888888888888888888888888888888888888888888888888kkkkkkkkkkTTuTTTuTTTuTTTuTTDHHHHHHDDUJJUDFDUJJUDDDDDptpTuTTTuTTTuTTTu88888888$$$$$$88%%%88888888888888888bbbbbbb888888889999999999TTTT1TTTTTTTTTTTTpCpDDDD1T()*(TDT()*(TTTTTptpTTTTT2TTT2TTT28888888888888888888888888888888888888888888888888882TTT2TTT2TTTTTTTTTTTTTTTTTTTptpTTTTT()*(TTT()*(TTTTTptpTTTTTTTTTTTTTT999999999999999999999999999999999999999999999999999TTTTTTTTTT5555555555555555555p555555+,,+555+,,+555555p5555555555555555555555555555555555555555555555555555555555555555555555555555-------------------------+YYY!+-+YYY!+----------------------------------------------------------------------------------.-.-.-.-.-.-.-.-.-.-.-.-.+!!!!+-+!!!!+.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.--.-.-.-.-.-.-.-.-.-.-.-.-.++++-.-++++.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-......................../////////////////........................................................................................................................................................................................................................................................................................................................................................................................................................................................6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6..6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6.6666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666", "t": [64, 15, 102, 55], "s": [64, 17], "k": [[6, 24], [55, 16], [57, 44], [114, 12], [8, 44]], "a": 3};
 const FACEP={"1": "#5a1742", "2": "#ffc6df", "3": "#ff86b8", "4": "#e9559a", "5": "#b8357a", "6": "#fff3ea", "7": "#ffdcc6", "8": "#f3ad93", "9": "#8a3f45", "K": "#2a1838", "W": "#ffffff", "I": "#1fb7a4", "J": "#8cf3dc", "B": "#ff9fb3", "M": "#e0607a", "P": "#ff7e95", "Z": "#fff3b0", "Y": "#fff6c2", "X": "#e9a92e", "Q": "#3b437c", "V": "#eef1ff", "R": "#ff4f8f", "o": "#2a1530", "h": "#ff7fb0", "H": "#ffb8d4", "d": "#c94f86", "s": "#ffe2cf", "S": "#f2bfa6", "w": "#ffffff", "e": "#2aa6a0", "k": "#1c2a44", "m": "#c8405a", "g": "#5b6fa8", "G": "#8fe6ff", "b": "#ff9aa8", "c": "#e9eefc", "C": "#b9c4e6", "n": "#26335c", "N": "#3d4f8a", "t": "#b83a4a", "u": "#7fb8ff", "y": "#ffd25e", "x": "#7a8ad0", "r": "#8a2438", "p": "#ff5c9e"};
-const FACES={"eki_n": ["........11......", ".....111311.....", "...1133333311...", "..133222233341..", ".ZY3333333334ZY.", ".YX3343334334YX.", "1344388348834431", "1344877777784431", "1347KKK77KKK7431", "1347WIK77WIK7431", "1347JJI77JJI7431", "1347B777777B7431", "1348777MM7778431", "135.98777789.531", "15...QVRRVQ...51", "1...QVVRRVVQ...1"], "eki_j": ["........11......", ".....111311.....", "...1133333311...", "..133222233341..", ".ZY3333333334ZY.", ".YX3343334334YX.", "1344388348834431", "1344877777784431", "1347777777777431", "13477K7777K77431", "1347K7K77K7K7431", "1347B77MM77B7431", "1348777PP7778431", "135.98777789.531", "15...QVRRVQ...51", "1...QVVRRVVQ...1"], "sasa_n": ["................", "....oooooooo....", "...onnnnnnnno...", "..onnNNnnnnnno..", "..onNNnnnnnnno..", "..onnnnsssnnno..", "..onsssssssso...", ".oogggggggggoo..", ".osgwwgsgwwgso..", ".osgkwgggkwgso..", "..osgggsgggso...", "..osssssssso....", "..ossskkksso....", "...osssssso.....", "..onnoctconno...", ".onnnnotonnnno.."], "sasa_t": ["................", "....oooooooo..u.", "...onnnnnnnno.uu", "..onnNNnnnnnno.u", "..onNNnnnnnnno..", "..onnnnsssnnno..", "..onsssssssso...", ".oogggggggggoo..", ".osgwwgsgwwgso..", ".osgkkgggkkgso..", "..osgggsgggso...", "..osSSssSSsso...", "..osskkkksso....", "...osssssso.....", "..onnoctconno...", ".onnnnotonnnno.."]};
+const FACES={"eki_n": ["........11......", ".....111311.....", "...1133333311...", "..133222233341..", ".ZY3333333334ZY.", ".YX3343334334YX.", "1344388348834431", "1344877777784431", "1347KKK77KKK7431", "1347WIK77WIK7431", "1347JJI77JJI7431", "1347B777777B7431", "1348777MM7778431", "135.98777789.531", "15...QVRRVQ...51", "1...QVVRRVVQ...1"], "eki_j": ["........11......", ".....111311.....", "...1133333311...", "..133222233341..", ".ZY3333333334ZY.", ".YX3343334334YX.", "1344388348834431", "1344877777784431", "1347777777777431", "13477K7777K77431", "1347K7K77K7K7431", "1347B77MM77B7431", "1348777PP7778431", "135.98777789.531", "15...QVRRVQ...51", "1...QVVRRVVQ...1"], "sasa_n": ["................", "....oooooooo....", "...onnnnnnnno...", "..onnNNnnnnnno..", "..onNNnnnnnnno..", "..onnnnsssnnno..", "..onsssssssso...", ".oogggggggggoo..", ".osgwwgsgwwgso..", ".osgkwgggkwgso..", "..osgggsgggso...", "..osssssssso....", "..ossskkksso....", "...osssssso.....", "..onnoctconno...", ".onnnnotonnnno.."], "sasa_t": ["................", "....oooooooo....", "...onnnnnnnno...", "..onnNNnnnnnno..", "..onNNnnnnnnno..", "..onnnnsssnnno..", "..onsssssssso...", ".oogggggggggoo..", ".osgwwgsgwwgso..", ".osgkkgggkkgso..", "..osgggsgggso...", "..osSSssSSsso...", "..osskkkksso....", "...osssssso.....", "..onnoctconno...", ".onnnnotonnnno.."]};
 const LOGO={"a":[{"c":"も","adv":15,"ox":1,"oy":-13,"rows":["....##.......","...###.......","...###.......","##########...","##########...","#..##........","...##..###...",".#########...","########...#.","#####......##","...###....###","...#########.","....#######..","......###...."]},{"c":"ん","adv":15,"ox":1,"oy":-12,"rows":["...##........","..###........","..###........","..##.........",".###.........",".######......",".#######.....",".#######...#.","####..###..##","###...###.###","###....#####.","##.....#####.",".#.......#..."]},{"c":"す","adv":15,"ox":1,"oy":-13,"rows":[".......##....",".......##....","...##########","#############","######.###...","....######...","...#######...","..###..###...","..###.####...","..########...","...#######...",".......###...","......###....",".....###....."]},{"c":"た","adv":15,"ox":1,"oy":-13,"rows":["....#........","...###.......","..######.....","########.....","######...###.","..##...#####.",".###..######.",".###...#.....",".###.........",".##..........",".##...###....","###...#######","###....######","..........###"]},{"c":"ー","adv":15,"ox":1,"oy":-7,"rows":["#############","#############","#############"]}],"b":[{"c":"ふ","adv":25,"ox":1,"oy":-21,"rows":[".....######.............","...##########...........","....##########..........","....###########.........","....##....#####.........","..........#####.........","..........#####.........","........######..........","......#######...........","......#######...........","......#########.....#...","......##########.####...","..#.......#######.####..",".####.......#####.####..",".####........####.#####.",".####........####..####.","#####........####..####.","####........#####..####.","####.......######..#####","####......######...####.","####.....######.........","####......####..........","...........##..........."]},{"c":"ゅ","adv":25,"ox":3,"oy":-16,"rows":[".......###.........","......########.....",".......#########...","..#...###########..","####.#############.","####.#############.","########..####.####","#######...####.####",".#####....####.####",".#####....####.####",".#####....####.####",".####..###########.","..###..###########.","..###.###########..","..#....#########...",".......#######.....","......#####........","........##........."]},{"c":"ー","adv":25,"ox":2,"oy":-12,"rows":["..##################..",".####################.","######################","######################",".####################.","..##################.."],"face":1},{"c":"じ","adv":25,"ox":3,"oy":-21,"rows":["....#..............","....####...........","...#####........#..","...####......##.##.","..#####......######","..#####.......#..#.","..####.............",".#####.............",".#####.............",".####..............",".####..............",".####..............","#####..............","#####...........#..",".####..........####",".####.........#####",".####.........#####",".#####......######.","..###############..","..###############..","...############....",".....#########....."]},{"c":"ょ","adv":25,"ox":5,"oy":-17,"rows":[".......#.........","....#####........",".....####........",".....####........",".....##########..",".....##########..","......#########..","......#####..##..","......####.......","...#######.......",".##########......","#############....","##############...","###...##########.","###...####.######","####.#####..####.","##########...##..",".########........","..######........."]},{"c":"ん","adv":25,"ox":1,"oy":-20,"rows":[".....####.............",".....#####............",".....####.............","....#####.............","....####..............","....####..............","...#####..............","...####...............","...####...............","...##########.........","..###########.........","..############........","..############.....#..",".######...#####....##.",".#####.....####...####",".#####.....#####..####",".#####......##########","#####.......#########.","#####.......########..","#####........#######..",".###..........####...."]},{"c":"っ","adv":25,"ox":3,"oy":-15,"rows":["......########....","...#############..","#################.","##################",".#####.......#####",".###..........####","..............####","..............####","..............####",".............#####","............#####.","...........######.",".........#######..","........#######...","........#####.....",".........###......"]},{"c":"！","adv":25,"ox":10,"oy":-21,"rows":[".##..",".####",".####",".####",".####",".####",".####",".####",".####",".####","#####","#####","#####","#####","#####","#####"],"pal":"g","pre":3},{"c":"♥","adv":0,"ox":9,"oy":-3,"rows":[".##.##.","#######","#######",".#####.","..###..","...#..."],"pal":"h","with":"！"}]};
 /* title logo: baked letter masks -> pixel "sticker" letters (fill, dark line, white border, drop), drawn per letter so they can hop */
 const LGW=180,LGH=62;let LGP=null;
@@ -1466,16 +1480,16 @@ function stageHTML(q,c,o){o=o||{};const zin=c?inZone(q,c):false;const corner='c-
   return '<section class="stage">'+map+'<div class="side">'+side+'</div></section>'}
 function bdLine(m){const bd=breakdown(m);return '<span class="f"><span>土台<b>'+bd.core+'</b></span><span>スキル<b>+'+bd.sv+'</b></span>'+(bd.pg?'<span>相性<b class="g">+'+bd.pg+'</b></span>':'')+(bd.pb?'<span>相性<b class="b">−'+bd.pb+'</b></span>':'')+(bd.sx?'<span>特殊<b>+'+bd.sx+'</b></span>':'')+(bd.aw?'<span>覚醒<b>+'+bd.aw+'</b></span>':'')+'</span>'}
 function mCard(m,o){o=o||{};const r=G.run;const q=o.noq||!r?null:r.quest;U.mons[m.id]=m;const away=r&&!o.noq&&isAway(r,m);
-  const tags=m.skills.map(s=>{const k=SK[s];const cmb=U.own&&partnersOf(s).some(p=>U.own.has(p.with));return '<span class="st t'+k.t+(cmb?' cmb':'')+(k.n.length>=9?' lg':'')+'">'+plot(vecOf(m,s),k.t,2,k.tag==='mediate')+'<span>'+k.n+'</span></span>'}).join('');
+  const tags=m.skills.map(s=>{const k=SK[s];const nm=skName(s,lvOf(m,s));const cmb=U.own&&partnersOf(s).some(p=>U.own.has(p.with));return '<span class="st t'+k.t+(cmb?' cmb':'')+(nm.length>=9?' lg':'')+'">'+plot(vecOf(m,s),k.t,2,k.tag==='mediate')+'<span>'+nm+'</span></span>'}).join('');
   const tg=o.act?'button':'div';
   return '<'+tg+' class="mc cut'+(o.on?' on':'')+(o.dis||away?' dis':'')+(o.cls?' '+o.cls:'')+(U.just===m.id?' pop':'')+'"'+(o.act?' data-act="'+o.act+'" data-arg="'+(o.arg||m.id)+'" aria-pressed="'+!!o.on+'"':'')+(o.tut?' data-tut="1"':'')+' data-info="m:'+m.id+'">'+
     '<span class="hd"><span class="nm">'+nameOf(m)+'</span><span class="meta'+(totalOf(m)>=1000?' k4':'')+'"><i class="fam" style="--c:'+FAM[m.fam].c+'">'+FAM[m.fam].n+'</i><span class="tl">総合</span><span class="tv">'+totalOf(m)+'</span></span>'+mini(m,q,15,2)+'</span>'+
     '<span class="art">'+(o.rb?'<span class="rb'+(o.rbc?' '+o.rbc:'')+'">'+o.rb+'</span>':'')+spr(m)+'</span>'+
     '<span class="tg">'+(tags||'<span class="st none">スキルなし</span>')+(m.quirk?'<span class="qk">クセ '+QK[m.quirk].n+' '+qv(m.quirk)+'</span>':'')+(away?'<span class="why">レンタル中（'+(m.back+1)+'日目に戻る）</span>':'')+(o.why?'<span class="why">'+o.why+'</span>':'')+'</span>'+(o.ft?'<span class="ft">'+o.ft+'</span>':'')+'</'+tg+'>'}
 function skChip(c,o){const k=SK[c.sk];const v=c.vo||k.v;const med=k.tag==='mediate';const tg=o.act?'button':'div';const src=o.src!=null?o.src:(c.src==='P0'?'血':c.src==='K'?'倉':c.src?c.src.slice(1):'');
-  return '<'+tg+' class="sc cut t'+k.t+(o.on?' on':'')+(o.dis?' dis':'')+(o.cls?' '+o.cls:'')+(U.just===c.key?' pop':'')+'"'+(o.act?' data-act="'+o.act+'" data-arg="'+c.key+'" aria-pressed="'+!!o.on+'"':'')+(o.tut?' data-tut="1"':'')+' data-info="s:'+c.sk+'">'+
+  return '<'+tg+' class="sc cut t'+k.t+(o.on?' on':'')+(o.dis?' dis':'')+(o.cls?' '+o.cls:'')+(U.just===c.key?' pop':'')+'"'+(o.act?' data-act="'+o.act+'" data-arg="'+c.key+'" aria-pressed="'+!!o.on+'"':'')+(o.tut?' data-tut="1"':'')+' data-info="s:'+c.sk+':'+(c.lv||0)+(c.vo?':'+c.vo[0]+','+c.vo[1]:'')+'">'+
     '<span class="src '+(o.srcc!=null?o.srcc:(c.src==='P0'?'b':c.src==='K'?'k':''))+'">'+src+'</span><span class="pl">'+plot(v,k.t,2,med)+'</span>'+
-    '<span class="bd"><span class="nm'+(k.n.length>=9?' lg':'')+'">'+k.n+'</span><span class="sub"><span class="vx">'+vtxt(v,med)+'</span>'+(o.marks||[]).map(m=>'<span class="mk '+m[0]+'">'+m[1]+'</span>').join('')+'<span class="val">+'+k.val+'</span></span></span></'+tg+'>'}
+    '<span class="bd"><span class="nm'+(skName(c.sk,c.lv).length>=9?' lg':'')+'">'+skName(c.sk,c.lv)+'</span><span class="sub"><span class="vx">'+vtxt(v,med)+'</span>'+(o.marks||[]).map(m=>'<span class="mk '+m[0]+'">'+m[1]+'</span>').join('')+'<span class="val">+'+skVal(c.sk,c.lv)+'</span></span></span></'+tg+'>'}
 function questPanel(q,m,o){o=o||{};const r=G.run;
   return '<section class="sec fr panel"><div class="qp">'+mapEl(o.key||'q',{q,dots:o.dots||[],path:m||null},'')+'<div><h2>'+q.title+'</h2>'+(o.cmp?'':'<p class="small">納期 '+(r?r.days:q.days)+'日　用途 <span class="redact">■■■■■■</span></p>')+
     '<ul class="rl">'+reqList(q).map(x=>{const c=m?reqCheck(q,x,m):null;return '<li class="'+(c?(c.ok?'ok':'ng'):'')+'"><span class="bx">'+(c?ico(c.ok?'ok':'ng',2):'')+'</span><span>'+reqText(x)+(c&&c.cur?' <i>'+c.cur+'</i>':'')+'</span></li>'}).join('')+'</ul></div></div>'+
@@ -1534,7 +1548,7 @@ S.day=()=>{const r=G.run,me=G.meta,q=r.quest;const sel=G.ui.selNode;const L=r.ma
   const tb=(id,lab)=>'<button class="tab'+(tab===id?' on':'')+'" role="tab" aria-selected="'+(tab===id)+'" data-act="dtab" data-arg="'+id+'">'+lab+'</button>';
   let body;
   if(tab==='inv')body=r.inv.length?r.inv.map(m=>mCard(m)).join(''):'<p class="empty">手持ちがいない</p>';
-  else body=r.bank.length?r.bank.map(k=>skChip({key:k.u,sk:k.sk,vo:k.vo||null,src:'K'},{act:'pick',on:pk===k.u,marks:[['fee','売ると+'+releaseSkValue(me,k.sk)+'G']]})).join(''):'<p class="empty">倉庫は空っぽ。合体のときに「倉庫へ」をえらんだスキルが入る</p>';
+  else body=r.bank.length?r.bank.map(k=>skChip({key:k.u,sk:k.sk,vo:k.vo||null,src:'K',lv:k.lv||0},{act:'pick',on:pk===k.u,marks:[['fee','売ると+'+releaseSkValue(me,k.sk)+'G']]})).join(''):'<p class="empty">倉庫は空っぽ。合体のときに「倉庫へ」をえらんだスキルが入る</p>';
   const selB=tab==='bank'&&pk&&r.bank.find(x=>x.u===pk);
   return topBar()+tip(t1)+routeStrip(r)+'<div class="notes auto">'+info+'</div>'+
    qStrip(true)+
@@ -1556,7 +1570,7 @@ S.job=()=>{const r=G.run,me=G.meta;const isSell=r.node==='sell';const pk=G.ui.pi
      (!isSell&&j.rew&&j.rew.mons?'<p class="small">もらえる子</p><div class="grid">'+j.rew.mons.map(m=>mCard(m,{cls:'pick2'})).join('')+'</div>':'')+
      (cs.length?'<p class="small">渡せるもの（タップでえらぶ）</p><div class="grid">'+cs.map(c=>{const key=ji+'|'+c.id;const on=pk===key;const p=jobPrice(r,me,j,c);if(on)lab=isSell?'売る +'+p+'G':'交換する';
        if(c.type==='mon'){const m=r.inv.find(x=>x.id===c.id);return mCard(m,{act:'pick',arg:key,on,ft:isSell?'売ると +'+p+'G（下取りは+'+releaseMonValue(me,m)+'G）':''})}
-       const b=r.bank.find(x=>x.u===c.id);return skChip({key,sk:b.sk,vo:b.vo||null,src:'K'},{act:'pick',on,marks:[['fee','売ると+'+p+'G']]})}).join('')+'</div>':'<p class="small">条件に合うものを持っていない</p>')+'</section>'}).join('');
+       const b=r.bank.find(x=>x.u===c.id);return skChip({key,sk:b.sk,vo:b.vo||null,src:'K',lv:b.lv||0},{act:'pick',on,marks:[['fee','売ると+'+p+'G']]})}).join('')+'</div>':'<p class="small">条件に合うものを持っていない</p>')+'</section>'}).join('');
   return topBar()+qStrip()+shell(tip(tp)+'<section class="sec fr panel">'+talk([['sasa',r.jobLine||'']])+'</section>'+body,ghBtn('jobEnd','今日を終える')+goBtn('jobDo',lab||'渡すものをえらぶ',{dis:!lab}))};
 S.show=()=>{const r=G.run;const back=r.day+3;const late=back>r.days;const pk=G.ui.pick;const sm=pk&&r.inv.find(m=>m.id===pk);
   return topBar()+qStrip()+shell(tip('出張展示では、手持ちの1体を見世物にしてお金を稼げます。\n展示した子は2日間レンタルに出て、その間は合体や依頼に使えません。稼ぎは総合値で決まり、依頼のゾーンに近い子ほど上乗せされます。')+'<section class="sec fr panel">'+talk([['sasa',r.showLine||'']])+'</section>'+
@@ -1576,7 +1590,9 @@ S.fuse=()=>{const r=G.run,me=G.meta,fs=r.fs,q=r.quest;const ps=fsParents(r);cons
   let nt='';
   if(!pv)nt='<span class="nt hx">'+(ps.length?'あと1体えらぶと、できあがりの予想が出る。':'1体目が「血統」。子はその系統になる。')+(fs.max>=3?'特殊合体になるかは、1体目と2体目の系統で決まる。':'子の出発点は、血統の系統の位置に親の位置を少し混ぜた場所。')+'</span>';
   else{const bd=breakdown(c);nt=bdLine(c);const it=[];
-    pv.combos.forEach(cb=>it.push('<span class="nt cmb">◆合成 → '+SK[cb[2]].n+'</span>'));
+    {const la=selLv(r),inc={};pv.raw.forEach((s,i)=>inc[s]=Math.max(inc[s]||0,la[i]||0));const up=c.skills.filter(s=>pv.boosts.includes(s)&&(c.lv[s]||0)>(inc[s]||0));
+     pv.combos.forEach(cb=>{if(c.skills.includes(cb[2])&&!up.includes(cb[2]))it.push('<span class="nt cmb">◆合成 → '+skName(cb[2],c.lv[cb[2]])+'</span>')});
+     up.forEach(s=>it.push('<span class="nt cmb">◆強化 → '+skName(s,c.lv[s])+'</span>'))}
     if(pv.spCand&&!c.sp)it.push('<span class="nt sp">特殊合体まで 土台あと'+(SPX_MIN-c.core)+'</span>');
     bd.p.b.forEach(([a,b])=>it.push(bd.p.med?'<span class="nt m">△中和 '+SK[a].n+'×'+SK[b].n+'</span>':'<span class="nt b">×'+SK[a].n+'×'+SK[b].n+'</span>'));
     if(bd.p.g.length===1&&c.quirk!=='kuchi')it.push('<span class="nt g">○'+SK[bd.p.g[0][0]].n+'×'+SK[bd.p.g[0][1]].n+'</span>');
@@ -1598,20 +1614,21 @@ S.fuse=()=>{const r=G.run,me=G.meta,fs=r.fs,q=r.quest;const ps=fsParents(r);cons
     else if(ps.length<2)t='次に相手をえらんでください。このマスでは最大'+fs.max+'体まで混ぜられます。';
     else if(U.tab==='mon')t='上に、できあがりの予想が出ました。次は光っている「スキル」のタブを開いて、受け継ぐスキルをえらびます。';
     else if(!fs.sel.length)t='受け継ぐスキルをえらびます。矢印は位置を動かす向き、「↑2」がその量、金の数字が総合値です。\nマップの線が、子の動く道筋。最後の印が緑ならゾーン内です。';
-    else t='えらばなかったスキルは消えますが、「倉庫へ」のタブで1つだけ取っておけます。\n「◆合成」の印は、両方えらぶと合体後に1つの強いスキルにまとまる組み合わせです。決まったら「合体する」を押してください。'}
+    else t='えらばなかったスキルは消えますが、「倉庫へ」のタブで1つだけ取っておけます。\n「◆合成」の印は、両方えらぶと合体後に1つの強いスキルにまとまる組み合わせです。「◆強化」は合成スキルがかぶるときの印で、1つにまとまって+1されます。決まったら「合体する」を押してください。'}
   if(U.tab==='mon'||!pv){const full=fs.picks.length>=fs.max;
     body=r.inv.map((m,ix)=>{const i=fs.picks.indexOf(m.id);const on=i>=0;const bl=on?null:pickBlock(r,m.id);return mCard(m,{act:'pick',on,dis:!!bl,rb:on?(i===0?'血統':'素材'+i):'',rbc:i===0?'bl':'',why:bl&&!full&&!isAway(r,m)?bl:'',tut:!on&&ps.length<2&&ix<2})}).join('')}
-  else{const cands=fusionCands(r);const raw=pv.raw;const cur=resolveSkills(raw);const curP=pairInfo(cur.set);
+  else{const cands=fusionCands(r);const raw=pv.raw;const lv0=selLv(r);const cur=resolveSkills(raw,lv0);const curP=pairInfo(cur.set);
     const reach=new Set(cands.map(x=>x.sk));let chg=true;while(chg){chg=false;COMBO.forEach(x=>{if(reach.has(x[0])&&reach.has(x[1])&&!reach.has(x[2])){reach.add(x[2]);chg=true}})}
     if(U.tab==='sk'){hint='受け継ぐスキルをえらぶ。'+(fs.t==='final'?'':'のこりは消える。')+'金の数字は総合値。長押しでくわしく。'+(ps[0].quirk==='ibari'?'いばりんぼで枠−1。':'');
       const bans=banTags(r);if(bans.length)hint+='血統が偏食のため、'+bans.map(b=>TAG[b]).join('・')+'系は受け継げない。';
       body=cands.map((x,ix)=>{const on=fs.sel.includes(x.key);const mk=[];let cls='';
-        if(on){if(pv.combos.some(cb=>cb[0]===x.sk||cb[1]===x.sk))mk.push(['c2','◆合成'])}
-        else{const hyp=resolveSkills([...raw,x.sk]);const hp=pairInfo(hyp.set);
-          if(hyp.combos.length>cur.combos.length){mk.push(['c2','◆合成']);cls='c2'}else if(partnersOf(x.sk).some(p=>reach.has(p.with)))mk.push(['c1','◆']);
+        if(on){if(pv.boosts.length&&(pv.boosts.includes(x.sk)||pv.combos.some(cb=>(cb[0]===x.sk||cb[1]===x.sk)&&pv.boosts.includes(cb[2]))))mk.push(['c2','◆強化']);else if(pv.combos.some(cb=>cb[0]===x.sk||cb[1]===x.sk))mk.push(['c2','◆合成'])}
+        else{const hyp=resolveSkills([...raw,x.sk],[...lv0,x.lv||0]);const hp=pairInfo(hyp.set);
+          if(hyp.boosts.length>cur.boosts.length){mk.push(['c2','◆強化']);cls='c2'}
+          else if(hyp.combos.length>cur.combos.length){mk.push(['c2','◆合成']);cls='c2'}else if(partnersOf(x.sk).some(p=>reach.has(p.with)))mk.push(['c1','◆']);
           if(hp.g.length>curP.g.length&&c.quirk!=='kuchi')mk.push(['g','○']);
           if(!hp.med&&hp.b.length>curP.b.length)mk.push(['b','×'])}
-        if(x.src==='K'){const fee=bankFee(x.sk);mk.push(['fee'+(!on&&pv.fee+fee>r.gold?' ng':''),'−'+fee+'G'])}
+        if(x.src==='K'){const fee=bankFee(x.sk,x.lv);mk.push(['fee'+(!on&&pv.fee+fee>r.gold?' ng':''),'−'+fee+'G'])}
         const a=on?{ok:true}:canAdd(r,me,x.key);return skChip(x,{on,dis:!a.ok,act:'sk',marks:mk,cls,tut:!fs.sel.length&&ix<3})}).join('')||'<p class="empty">受け継げるスキルがない</p>'}
     else{const rest=cands.filter(x=>x.src!=='K'&&!fs.sel.includes(x.key));
       hint='えらばなかったスキルを1つだけ倉庫にのこせる（いま '+r.bank.length+'/'+bankCap(me)+'個）。長押しでくわしく。';
@@ -1622,7 +1639,7 @@ S.fuse=()=>{const r=G.run,me=G.meta,fs=r.fs,q=r.quest;const ps=fsParents(r);cons
    '<div class="act">'+ghBtn('cancel',U.arm&&performance.now()-U.arm<2500?'本当にやめる':'やめる')+goBtn('fuse',lab,{dis,tut:pv&&fs.sel.length})+'</div></div></section>'};
 S.release=()=>{const r=G.run,me=G.meta;const ov=overflow(r,me);const log=r.relLog||[];const pk=G.ui.pick||'';let lab=null;
   const inv=ov.inv?'<section class="sec fr panel">'+secH('手持ち','あと'+ov.inv+'体へらす')+'<div class="grid">'+r.inv.map(m=>{if(isAway(r,m))return mCard(m);const on=pk==='m:'+m.id;if(on)lab='手放す +'+releaseMonValue(me,m)+'G';return mCard(m,{act:'pick',arg:'m:'+m.id,on,ft:'手放すと +'+releaseMonValue(me,m)+'G'})}).join('')+'</div></section>':'';
-  const bank=ov.bank?'<section class="sec fr panel">'+secH('スキル倉庫','あと'+ov.bank+'個へらす')+'<div class="grid">'+r.bank.map(b=>{const on=pk==='s:'+b.u;if(on)lab='手放す +'+releaseSkValue(me,b.sk)+'G';return skChip({key:'s:'+b.u,sk:b.sk,vo:b.vo||null,src:'K'},{act:'pick',on,marks:[['fee','+'+releaseSkValue(me,b.sk)+'G']]})}).join('')+'</div></section>':'';
+  const bank=ov.bank?'<section class="sec fr panel">'+secH('スキル倉庫','あと'+ov.bank+'個へらす')+'<div class="grid">'+r.bank.map(b=>{const on=pk==='s:'+b.u;if(on)lab='手放す +'+releaseSkValue(me,b.sk,b.lv)+'G';return skChip({key:'s:'+b.u,sk:b.sk,vo:b.vo||null,src:'K',lv:b.lv||0},{act:'pick',on,marks:[['fee','+'+releaseSkValue(me,b.sk)+'G']]})}).join('')+'</div></section>':'';
   const over=ov.inv||ov.bank;
   return topBar()+qStrip()+shell(tip('倉庫か手持ちが上限を超えました。どれを手放すかえらんでください。手放したものは下取りでお金になります。')+
    '<section class="sec fr panel">'+secH('整理','手持ち '+r.inv.length+'/'+invCap(me)+'・倉庫 '+r.bank.length+'/'+bankCap(me))+'<p class="small">'+(over?'えらんで手放すか、「おまかせ」で価値の低いものから手放せる。おまかせは一番手の子と、依頼に必要なスキルを残す。':'<span class="okc">整理できました。</span>')+(log.length?'<br>手放したもの：'+log.join('、'):'')+'</p></section>'+inv+bank,
@@ -1748,11 +1765,11 @@ function pickOpt(i){const f=U.fx,r=G.run,me=G.meta;if(!f||f.st!=='opts')return;c
 function toResult(){const f=U.fx,m=f.res,lf=f.lf,r=G.run,q=r.quest;f.st='result';f.t0=performance.now();
   const ls=[];if(lf.final)ls.push(['eki',pick(L.awake)]);else if(lf.ps.length>=3)ls.push(['eki',pick(L.many)]);if(lf.combos.length)ls.push(['eki',pick(L.combo)]);if(lf.kind==='swing')ls.push(['eki',pick(L.swing)]);if(!ls.length)ls.push(['eki',pick(L.fuse)]);if(lf.final)ls.push(['sasa','……これは。報告書の書式に収まりません']);
   const ban=lf.final?'<div class="banner gold fxin">覚 醒</div>':m.sp?'<div class="banner fxin">特殊合体！</div>':lf.combos.length?'<div class="banner fxin">合成スキル発現！</div>':'';
-  const log=[];if(lf.extracted.length)log.push('倉庫へ：'+lf.extracted.map(s=>SK[s].n).join('、'));{const lostU=[...new Set(lf.lost||[])].filter(k=>!m.skills.includes(k)&&!lf.extracted.includes(k));if(lostU.length)log.push('消えたスキル：'+lostU.map(s=>SK[s].n).join('、'))}if(lf.fee)log.push('取り出し料 −'+lf.fee+'G');
+  const log=[];if(lf.extracted.length)log.push('倉庫へ：'+(lf.exN||lf.extracted.map(s=>SK[s].n)).join('、'));{const lostU=[...new Set(lf.lost||[])].filter(k=>!m.skills.includes(k)&&!lf.extracted.includes(k));if(lostU.length)log.push('消えたスキル：'+lostU.map(s=>SK[s].n).join('、'))}if(lf.fee)log.push('取り出し料 −'+lf.fee+'G');
   const all=allOk(q,m);U.rnum={from:0,to:totalOf(m),t0:performance.now()+150};const ov=overflow(r,G.meta);
   const ui=$('fxui');ui.hidden=false;ui.className='fxui res';
   ui.innerHTML=ban+'<div class="rhead fxin"><b class="rnm">'+nameOf(m)+'</b><span><span class="tl">総合値 </span><span class="tv" id="resnum">0</span></span></div>'+
-    '<div class="rcard fr panel fxin"><div class="rsk">'+(m.skills.map(s=>{const k=SK[s];return '<span class="rs t'+k.t+'">'+plot(vecOf(m,s),k.t,2,k.tag==='mediate')+'<span>'+k.n+'</span><span class="val">+'+k.val+'</span></span>'}).join('')||'<span class="rs">スキルなし</span>')+'</div>'+
+    '<div class="rcard fr panel fxin"><div class="rsk">'+(m.skills.map(s=>{const k=SK[s];return '<span class="rs t'+k.t+'">'+plot(vecOf(m,s),k.t,2,k.tag==='mediate')+'<span>'+skName(s,lvOf(m,s))+'</span><span class="val">+'+skVal(s,lvOf(m,s))+'</span></span>'}).join('')||'<span class="rs">スキルなし</span>')+'</div>'+
     '<div class="och">'+(all?'<span class="pass">いまのままで納品できる</span>':reqChips(q,m,false))+'</div>'+
     '<div class="rlog">'+(m.quirk?'<span class="qk">クセ「'+QK[m.quirk].n+'」：'+qd(m.quirk)+'</span><br>':'')+log.join('<br>')+'</div></div>'+
     '<div class="fxin">'+talk(ls)+'</div><div class="act">'+goBtn('afterFuse',(ov.inv||ov.bank)?'倉庫を整理する':r.day>=r.days?'納品へ':'次の日へ')+'</div>'}
@@ -1788,19 +1805,19 @@ function fxTick(now){const f=U.fx;if(!f)return;const cv=$('fxcv');if(!cv||!cv.ge
   cv.style.transform=sh&&!RM?'translate('+(Math.random()<.5?-sh:sh)*2+'px,'+(Math.random()<.5?-sh:sh)*2+'px)':''}
 
 /* ================= sheets ================= */
-function skRow(s,v){const k=SK[s];const med=k.tag==='mediate';const cb=partnersOf(s).map(p=>'「'+SK[p.with].n+'」と合成で「'+SK[p.to].n+'」').join('、');
-  return '<div class="dr"><span class="pl">'+plot(v||k.v,k.t,2,med)+'</span><span class="n t'+k.t+'">'+k.n+'<span class="tagp">'+TAG[k.tag]+'</span></span><span class="val">+'+k.val+'</span><span class="d">'+k.d+'。'+(med?'位置を中央へ3割引き戻す。相性の悪さも中和する。':'位置：'+vecText(v||k.v)+'。')+(cb?cb+'。':'')+'</span></div>'}
+function skRow(s,v,lv){const k=SK[s];lv=lv||0;const med=k.tag==='mediate';const cb=partnersOf(s).map(p=>'「'+SK[p.with].n+'」と合成で「'+SK[p.to].n+'」').join('、');
+  return '<div class="dr"><span class="pl">'+plot(v||k.v,k.t,2,med)+'</span><span class="n t'+k.t+'">'+skName(s,lv)+'<span class="tagp">'+TAG[k.tag]+'</span></span><span class="val">+'+skVal(s,lv)+'</span><span class="d">'+k.d+'。'+(lv?'+'+lv+'で総合値への上乗せが+'+(skVal(s,lv)-k.val)+'。':'')+(med?'位置を中央へ3割引き戻す。相性の悪さも中和する。':'位置：'+vecText(v||k.v)+'。')+(cb?cb+'。':'')+'</span></div>'}
 function sheetHTML(){const s=U.sheet;if(!s)return '';const r=G.run;
   if(s.k==='menu')return '<h3>メニュー</h3><div class="mlist">'+[['quest','依頼書'],['fam','系統の傾向'],['route','日程表'],['zukan','図鑑']].map(x=>'<button class="btn fr ghost" data-act="sheet" data-arg="'+x[0]+'">'+x[1]+'</button>').join('')+'</div>'+sndBtns()+(r&&r.quest.tut?'<button class="sbtn" data-act="'+(G.meta.hideTips?'showTips':'hideTips')+'">'+(G.meta.hideTips?'案内を表示する':'案内を消す')+'</button>':'')+'<button class="sbtn" data-act="go" data-arg="title">中断してタイトルへ</button>';
   if(s.k==='quest'){const b=bestCand(r);return '<h3>依頼書</h3>'+questPanel(r.quest,b||null,{key:'sq',dots:r.inv.filter(m=>m!==b),cmp:false})+(b?'<p class="small">マップの線は、いまの一番手「'+nameOf(b)+'」。四角い点はほかの手持ち。</p>':'')}
   if(s.k==='fam')return '<h3>系統の傾向</h3><p class="small">子の出発点は「血統（1体目）の系統の出発位置を3分の2、親たちの位置の平均を3分の1」混ぜた場所。そこにスキルの矢印が足される。</p>'+ZF.map(f=>{const p=FAM[f].p;return '<div class="fgl">'+spr(prevM(f,0))+'<div><b>'+FAM[f].n+'</b> <span class="small">出発位置 '+(vecText([p[0],p[1]])||'中央')+'</span><div class="tg">'+[...FPOOL[f][1],...FPOOL[f][2]].map(k=>'<span class="st t'+SK[k].t+'">'+plot(SK[k].v,SK[k].t,2,SK[k].tag==='mediate')+'<span>'+SK[k].n+'</span></span>').join('')+'</div></div></div>'}).join('');
   if(s.k==='route')return '<h3>日程表</h3><p class="small">'+(r.day>=r.days?'最終日':(r.day+1)+'日目 / 全'+r.days+'日')+'。横にスクロールできる。</p>'+routeStrip(r,true)+'<div class="legend">'+LEGEND.map(k=>'<span><b>'+NODE[k].g+'</b>'+NODE[k].n+'</span>').join('')+'</div>';
   if(s.k==='zukan')return '<h3>図鑑</h3>'+zukanBody();
-  if(s.k==='info'){const [t,id]=s.arg.split(':');
+  if(s.k==='info'){const [t,id,lvs,vs]=s.arg.split(':');
     if(t==='m'){const m=U.mons[id]||(r&&r.inv.find(x=>x.id===id));if(!m)return '';const bd=breakdown(m),p=posOf(m);
       const hasQ=r&&r.quest&&!RUNLESS.includes(G.screen);
-      return (hasQ?'<div class="qp">'+mapEl('si',{q:r.quest,path:m})+'<div class="dcol">':'')+'<div class="dh"><span class="big">'+spr(m)+'</span><div><h3>'+nameOf(m)+'</h3><div class="kname" style="margin:3px 0"><i class="fam" style="--c:'+FAM[m.fam].c+'">'+FAM[m.fam].n+'</i><span style="font-size:10px;color:var(--dim)">総合値</span><span class="tv">'+bd.total+'</span></div><p class="small">土台'+bd.core+'・スキル+'+bd.sv+(bd.pg?'・相性+'+bd.pg:'')+(bd.pb?'・相性−'+bd.pb:'')+(bd.sx?'・特殊+'+bd.sx:'')+(bd.aw?'・覚醒+'+bd.aw:'')+'<br>位置：'+(vecText([p[0],p[1]])||'中央')+'</p></div></div>'+(hasQ?'<div class="reqs">'+reqChips(r.quest,m,false)+'</div></div></div>':'')+'<div class="dl">'+(m.skills.map(x=>skRow(x,vecOf(m,x))).join('')||'<p class="small">スキルなし</p>')+'</div>'+(m.quirk?'<p class="small" style="color:#ffb19f">クセ「'+QK[m.quirk].n+'」：'+qd(m.quirk)+'</p>':'')}
-    return SK[id]?'<div class="dl">'+skRow(id)+'</div>':''}
+      return (hasQ?'<div class="qp">'+mapEl('si',{q:r.quest,path:m})+'<div class="dcol">':'')+'<div class="dh"><span class="big">'+spr(m)+'</span><div><h3>'+nameOf(m)+'</h3><div class="kname" style="margin:3px 0"><i class="fam" style="--c:'+FAM[m.fam].c+'">'+FAM[m.fam].n+'</i><span style="font-size:10px;color:var(--dim)">総合値</span><span class="tv">'+bd.total+'</span></div><p class="small">土台'+bd.core+'・スキル+'+bd.sv+(bd.pg?'・相性+'+bd.pg:'')+(bd.pb?'・相性−'+bd.pb:'')+(bd.sx?'・特殊+'+bd.sx:'')+(bd.aw?'・覚醒+'+bd.aw:'')+'<br>位置：'+(vecText([p[0],p[1]])||'中央')+'</p></div></div>'+(hasQ?'<div class="reqs">'+reqChips(r.quest,m,false)+'</div></div></div>':'')+'<div class="dl">'+(m.skills.map(x=>skRow(x,vecOf(m,x),lvOf(m,x))).join('')||'<p class="small">スキルなし</p>')+'</div>'+(m.quirk?'<p class="small" style="color:#ffb19f">クセ「'+QK[m.quirk].n+'」：'+qd(m.quirk)+'</p>':'')}
+    return SK[id]?'<div class="dl">'+skRow(id,vs?vs.split(',').map(Number):null,+lvs||0)+'</div>':''}
   return ''}
 function renderSheet(){const h=sheetHTML();if(!h){U.sheet=null;sheetEl.hidden=true;sheetEl.innerHTML='';return}
   const old=sheetEl.querySelector('.sbody');const st=old&&old.dataset.k===U.sheet.k?old.scrollTop:0;
@@ -1877,7 +1894,7 @@ const ACT={
   relAuto:()=>{const r=G.run,me=G.meta,q=r.quest;r.relLog=r.relLog||[];G.ui.pick=null;const keep=bestCand(r);
     while(overflow(r,me).inv>0){const w=r.inv.filter(x=>x!==keep&&!isAway(r,x)).sort((a,b)=>(totalOf(a)-(inZone(q,a)?50:0))-(totalOf(b)-(inZone(q,b)?50:0)))[0];if(!w)break;const n=nameOf(w);const g=releaseMon(r,me,w.id);r.relLog.push(n+'（+'+g+'G）')}
     const need=new Set(q.extra.filter(e=>e.t==='skill').flatMap(e=>[...precursors(e.v,2)]));
-    while(overflow(r,me).bank>0){const w=r.bank.slice().sort((a,b)=>(SK[a.sk].val+(need.has(a.sk)?100:0))-(SK[b.sk].val+(need.has(b.sk)?100:0)))[0];const n=SK[w.sk].n;const g=releaseSk(r,me,w.u);r.relLog.push(n+'（+'+g+'G）')}},
+    while(overflow(r,me).bank>0){const w=r.bank.slice().sort((a,b)=>(skVal(a.sk,a.lv)+(need.has(a.sk)?100:0))-(skVal(b.sk,b.lv)+(need.has(b.sk)?100:0)))[0];const n=skName(w.sk,w.lv);const g=releaseSk(r,me,w.u);r.relLog.push(n+'（+'+g+'G）')}},
   relDone:()=>{const r=G.run;if(overflow(r,G.meta).inv||overflow(r,G.meta).bank)return;const log=r.relLog||[];r.notice=[r.relPre,log.length?'手放したもの：'+log.join('、'):''].filter(Boolean).join('　')||null;r.relLog=[];r.relPre=null;toDay()},
   dpick:id=>{G.run.dsel=id;U.just=id},
   deliver:id=>{const res=doDeliver(G.run,G.meta,id);if(res){G.run.result=res;G.ui.earn=res.rp;G.screen='result';resSeq(res)}},
