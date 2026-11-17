@@ -1622,9 +1622,10 @@ S.fuse=()=>{const r=G.run,me=G.meta,fs=r.fs,q=r.quest;const ps=fsParents(r);cons
     if(U.tab==='sk'){hint='受け継ぐスキルをえらぶ。'+(fs.t==='final'?'':'のこりは消える。')+'金の数字は総合値。長押しでくわしく。'+(ps[0].quirk==='ibari'?'いばりんぼで枠−1。':'');
       const bans=banTags(r);if(bans.length)hint+='血統が偏食のため、'+bans.map(b=>TAG[b]).join('・')+'系は受け継げない。';
       body=cands.map((x,ix)=>{const on=fs.sel.includes(x.key);const mk=[];let cls='';
-        if(on){if(pv.boosts.length&&(pv.boosts.includes(x.sk)||pv.combos.some(cb=>(cb[0]===x.sk||cb[1]===x.sk)&&pv.boosts.includes(cb[2]))))mk.push(['c2','◆強化']);else if(pv.combos.some(cb=>cb[0]===x.sk||cb[1]===x.sk))mk.push(['c2','◆合成'])}
+        if(on){if(COMBO_OUT.has(x.sk)&&pv.boosts.includes(x.sk))mk.push(['c2','◆強化']);else if(pv.combos.some(cb=>cb[0]===x.sk||cb[1]===x.sk))mk.push(['c2','◆合成'])}
+        else if(raw.includes(x.sk)&&!COMBO_OUT.has(x.sk)){/* same normal skill already chosen: cannot be added, no forecast */}
         else{const hyp=resolveSkills([...raw,x.sk],[...lv0,x.lv||0]);const hp=pairInfo(hyp.set);
-          if(hyp.boosts.length>cur.boosts.length){mk.push(['c2','◆強化']);cls='c2'}
+          if(COMBO_OUT.has(x.sk)&&raw.includes(x.sk)){mk.push(['c2','◆強化']);cls='c2'}
           else if(hyp.combos.length>cur.combos.length){mk.push(['c2','◆合成']);cls='c2'}else if(partnersOf(x.sk).some(p=>reach.has(p.with)))mk.push(['c1','◆']);
           if(hp.g.length>curP.g.length&&c.quirk!=='kuchi')mk.push(['g','○']);
           if(!hp.med&&hp.b.length>curP.b.length)mk.push(['b','×'])}
