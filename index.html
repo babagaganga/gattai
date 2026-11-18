@@ -1530,7 +1530,7 @@ S.prologue=()=>topBar()+shell('<section class="sec fr panel">'+secH('被疑者�
   ['sasa','ただし納期は守ってください。要件を満たさない個体は接収されます。こちらで、その、有効活用しますので'],['nar','こうして、エキドナの合体だけを楽しむ日々が始まった。']
 ])+'</section>',ghBtn('go','タイトルへ','title')+goBtn('start','依頼を受ける'));
 S.brief=()=>{const r=G.run,q=r.quest;
-  return topBar()+shell(tip('左の図が「方向性マップ」です。縦が「かわいい⇔いかつい」、横が「おっとり⇔キレもの」。\n点線の円が目標ゾーン。納品する子をこの円の中に入れ、総合値を条件以上にすれば合格です。')+questPanel(q,null)+
+  return topBar()+shell(tip('下の図が「方向性マップ」です。縦が「かわいい⇔いかつい」、横が「おっとり⇔キレもの」。\n点線の円が目標ゾーン。納品する子をこの円の中に入れ、総合値を条件以上にすれば合格です。')+questPanel(q,null)+
    '<section class="sec fr panel">'+talk(q.brief)+'</section>'+
    '<section class="sec fr panel">'+secH('支給品','支度金 '+r.gold+'G と2体')+'<div class="grid">'+r.inv.map(m=>mCard(m)).join('')+'</div></section>',
    ghBtn('go','タイトルへ','title')+goBtn('begin','合体の日々を始める',{tut:1}))};
